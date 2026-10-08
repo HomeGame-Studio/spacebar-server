@@ -237,8 +237,13 @@ async function consume(this: WebSocket, opts: EventOpts) {
             if (!this.member_events[data.user.id]) break;
             await this.member_events[data.user.id]();
             break;
-        case "RELATIONSHIP_REMOVE":
         case "CHANNEL_DELETE":
+        case "THREAD_DELETE":
+            // routed by guild, so unsubscribe the channel itself, not the guild listener
+            this.events[data.id]?.();
+            delete this.events[data.id];
+            break;
+        case "RELATIONSHIP_REMOVE":
         case "GUILD_DELETE":
             this.events[id]?.();
             delete this.events[id];
@@ -255,7 +260,12 @@ async function consume(this: WebSocket, opts: EventOpts) {
             break;
         case "CHANNEL_CREATE":
             if (!permission.overwriteChannel(data.permission_overwrites).has("VIEW_CHANNEL")) return;
-            this.events[id] = await listenEvent(id, consumer, listenOpts);
+            // routed by guild: subscribe the new channel, not the (already subscribed) guild
+            this.events[data.id] = await listenEvent(data.id, consumer, listenOpts);
+            break;
+        case "THREAD_CREATE":
+            // threads are channels too; without this a session never sees messages in threads created after IDENTIFY
+            if (!this.events[data.id]) this.events[data.id] = await listenEvent(data.id, consumer, listenOpts);
             break;
         case "RELATIONSHIP_ADD":
             this.events[data.user.id] = await listenEvent(data.user.id, handlePresenceUpdate.bind(this), this.listen_options);
@@ -269,14 +279,15 @@ async function consume(this: WebSocket, opts: EventOpts) {
             ]);
             break;
         case "CHANNEL_UPDATE": {
-            const exists = this.events[id];
+            const channelId = data.id as string;
+            const exists = this.events[channelId];
             if (permission.overwriteChannel(data.permission_overwrites).has("VIEW_CHANNEL")) {
                 if (exists) break;
-                this.events[id] = await listenEvent(id, consumer, listenOpts);
+                this.events[channelId] = await listenEvent(channelId, consumer, listenOpts);
             } else {
                 if (!exists) return; // return -> do not send channel update events for hidden channels
-                opts.cancel(id);
-                delete this.events[id];
+                exists();
+                delete this.events[channelId];
             }
             break;
         }
